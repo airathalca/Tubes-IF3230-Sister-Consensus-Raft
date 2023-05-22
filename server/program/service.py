@@ -1176,12 +1176,15 @@ class RaftNode(metaclass=RaftNodeMeta):  # Ini Singleton
             )
 
     def start_heartbeat(self):
-        count = 0
-        while self.__current_role == Role.LEADER:
-            self.send_heartbeat()
-            count += 1
+        with self.__rw_locks["current_role"].r_locked():
+            current_role = self.__current_role
 
+        while current_role == Role.LEADER:
+            self.send_heartbeat()
             time.sleep(self.__heartbeat_interval)
+
+            with self.__rw_locks["current_role"].r_locked():
+                current_role = self.__current_role
 
 
 @rpyc.service
