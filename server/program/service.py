@@ -1066,46 +1066,42 @@ class RaftNode(metaclass=RaftNodeMeta):  # Ini Singleton
         self.__last_heartbeat_time = time.time()
         self.__heartbeat_timeout = random.uniform(1.5, 3.0)
 
+    # TODO: Ini jangan lupa ada lock dan rollback mechanism
     def handle_election_win(self):
-        # time.sleep(1)
-        with self.__rw_locks["current_role"].w_locked():
-            # if(self.__current_role != Role.CANDIDATE) :
-            #     return
+        with self.__rw_locks["current_role"].w_locked(), self.__rw_locks["current_leader_address"].w_locked():
             print("Election won by node", self.__config.get("SERVER_ADDRESS"))
+
             self.__current_role = Role.LEADER
             self.__current_leader_address = self.__config.get("SERVER_ADDRESS")
+
             print("Current role: ", self.__current_role)
             print("Current term: ", self.__current_term)
 
             self.__storage.save_current_leader_address(
-                self.__current_leader_address)
+                self.__current_leader_address
+            )
 
-            # stop self timer and start heartbeat
-        # self.start_timer()
-        # self.start_heartbeat()
+        # RPC become follower to all known address
+        with self.__rw_locks["current_known_address"].r_locked(), self.__rw_locks["current_term"].r_locked(), self.__rw_locks["current_leader_address"].r_locked():
+            known_follower_addresses = {
+                address: server_info
+                for address, server_info in self.__current_known_address.items()
+                if address != self.__config.get("SERVER_ADDRESS")
+            }
 
-            # rpc become follower to all known address
-        with self.__rw_locks["current_known_address"].r_locked():
-            for address in self.__current_known_address:
-                # skip if address is current server address
-                if (address == self.__config.get("SERVER_ADDRESS")):
-                    continue
-
-                print("Sending become follower to {}".format(address))
-                # send request vote to address
-                conn = create_connection(address)
-                try:
-                    asyncio.run(
+            asyncio.run(
+                wait_for_majority(
+                    *(
                         dynamically_call_procedure(
-                            conn,
+                            create_connection(address),
                             "become_follower",
                             serialize(self.__current_term),
                             serialize(self.__current_leader_address),
                         )
+                        for address, _ in known_follower_addresses.items()
                     )
-                except:
-                    print("Failed to send become follower to {}".format(address))
-                    continue
+                )
+            )
 
         # Heartbeat
         self.hearbeat_thread = threading.Thread(target=self.start_heartbeat)
