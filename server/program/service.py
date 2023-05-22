@@ -1152,37 +1152,28 @@ class RaftNode(metaclass=RaftNodeMeta):  # Ini Singleton
 
         self.__last_heartbeat_time = time.time()
 
-    def hearbeat_loop(self):
-        # count = 0
-        while self.__current_role == Role.LEADER:
-            elapsed_time = time.time() - self.__last_heartbeat_time
-
-            # stop if conut more than 50
-            # if(count > 50) :
-            #     return
-            if (elapsed_time > 0.1):
-                self.send_heartbeat()
-                # count += 1
-                self.__last_heartbeat_time = time.time()
-
     def send_heartbeat(self):
         # loop through all known address
-        with self.__rw_locks["current_known_address"].r_locked():
-            for address in self.__current_known_address:
-                # skip if address is current server address
-                if (address == self.__config.get("SERVER_ADDRESS")):
-                    continue
+        with self.__rw_locks["current_known_address"].r_locked(), self.__rw_locks["current_term"].r_locked():
+            known_follower_addresses = {
+                address: server_info
+                for address, server_info in self.__current_known_address.items()
+                if address != self.__config.get("SERVER_ADDRESS")
+            }
 
-                # send heartbeat to address
-                conn = create_connection(address)
-                asyncio.run(
-                    dynamically_call_procedure(
-                        conn,
-                        "handle_heartbeat",
-                        serialize(self.__current_term),
-                        serialize(self.__config.get("SERVER_ADDRESS")),
+            asyncio.run(
+                wait_for_majority(
+                    *(
+                        dynamically_call_procedure(
+                            create_connection(address),
+                            "handle_heartbeat",
+                            serialize(self.__current_term),
+                            serialize(self.__config.get("SERVER_ADDRESS")),
+                        )
+                        for address, _ in known_follower_addresses.items()
                     )
                 )
+            )
 
     def start_heartbeat(self):
         count = 0
